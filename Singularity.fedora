@@ -1,0 +1,75 @@
+BootStrap: docker
+From: fedora:25
+
+%runscript
+TEMPDIR="$(mktemp -d)"
+echo "Creating and changing into temporary directory $TEMPDIR..."
+cd "$TEMPDIR"
+
+# Hard coded path for wineprefix
+APPDIR="$HOME/WINE/Topofusion"
+PROFILEDIR="$HOME/WINE/PROFILES/${USER}@${HOSTNAME}"
+mkdir -p $APPDIR
+mkdir -p $PROFILEDIR
+
+echo "Setting up wine prefix..."
+export WINEPREFIX="$TEMPDIR/wineprefix"
+export WINEARCH="win32"
+
+if [ -f "$APPDIR/wineprefix.tgz" ]; then
+    echo "Found existing wineprefix - restoring it..."
+    mkdir -p "$WINEPREFIX"
+    cd "$WINEPREFIX"
+    tar xzf "$APPDIR/wineprefix.tgz"
+else
+  wineboot --init
+
+  echo "Installing TopoFusion and its dependencies ..."
+  winetricks dlls directx9
+  winetricks dlls vb6run
+  wget http://topofusion.com/TopoFusion-Demo-Pro-5.43.exe
+  wine ./TopoFusion-Demo-Pro-5.43.exe
+fi
+
+echo "Containerizing user profile..."
+if [ -d "$PROFILEDIR" ]; then
+    rm -rf "$WINEPREFIX/drive_c/users/$USER"
+else
+    echo "This user profile is newly generated..."
+    mv "$WINEPREFIX/drive_c/users/$USER" "$PROFILEDIR"
+fi
+echo "Loading existing user profile"
+ln -s "$PROFILEDIR" "$WINEPREFIX/drive_c/users/$USER"
+
+# at first container start run bash to let user finish configuration
+if [ ! -f "$APPDIR/wineprefix.tgz" ]; then
+  env WINEPREFIX="$WINEPREFIX" WINEARCH="$WINEARCH" /bin/bash
+fi
+
+# run TopoFusion
+    wine $WINEPREFIX/drive_c/Program\ Files/TopoFusion/TopoFusion.exe
+
+if [ ! -f "$APPDIR/wineprefix.tgz" ]; then
+ wineboot --end-session
+ echo "Saving initial wineprefix..."
+ cd $WINEPREFIX && tar czf "$APPDIR/wineprefix.tgz" . && sync
+fi 
+
+rm -rf "$TEMPDIR" 
+
+%post
+    dnf -y install redhat-lsb-core wget git which devscripts-checkbashisms ShellCheck python3-bashate cabextract
+    dnf -y install 'dnf-command(config-manager)'
+    dnf config-manager --add-repo https://dl.winehq.org/wine-builds/fedora/25/winehq.repo
+    dnf -y install winehq-stable #winetricks
+
+    git clone https://github.com/Winetricks/winetricks.git
+    cd winetricks
+    make install
+    
+    dnf -y install libntlm samba-winbind-clients
+    mkdir /APPS /PROFILES
+    chmod 0777 /APPS /PROFILES
+
+    mkdir /uufs /scratch
+# /etc/sysctl.d/10-ptrace.conf
